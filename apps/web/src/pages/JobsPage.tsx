@@ -5,8 +5,10 @@ import { fetchJobs, createJob, updateJob, deleteJob, getJobFromDescription } fro
 import type { Job, JobStatus, EmploymentType } from '@/types/job';
 import { JOB_STATUS_LABELS, EMPLOYMENT_TYPES } from '@/types/job';
 
-type StatusFilter = 'all' | JobStatus;
+const SEARCH_DEBOUNCE_MS = 400;
+const PAGE_SIZE = 20;
 
+type StatusFilter = 'all' | JobStatus;
 const STATUS_OPTIONS: JobStatus[] = ['draft', 'active', 'fulfilled'];
 
 function statusBadgeClass(status: JobStatus): string {
@@ -39,6 +41,12 @@ export function JobsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [pagination, setPagination] = useState<{
+    hasMore: boolean;
+    lastEvaluatedKey: string | null;
+  }>({ hasMore: false, lastEvaluatedKey: null });
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createFormInitialValues, setCreateFormInitialValues] = useState<Partial<Job> | null>(null);
   const [createFormSourceDescription, setCreateFormSourceDescription] = useState<string | null>(null);
@@ -49,24 +57,53 @@ export function JobsPage() {
   const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [saving, setSaving] = useState(false);
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await fetchJobs(
-        statusFilter === 'all' ? undefined : { status: statusFilter }
-      );
-      setJobs(list);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load jobs');
-    } finally {
-      setLoading(false);
+
+  const loadJobs = useCallback(
+    async (reset: boolean) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await fetchJobs({
+          status: statusFilter === 'all' ? undefined : statusFilter,
+          search: debouncedSearch.trim() || undefined,
+          limit: PAGE_SIZE,
+          lastEvaluatedKey: reset ? undefined : pagination.lastEvaluatedKey ?? undefined,
+        });
+        if (reset) {
+          setJobs(result.jobs);
+        } else {
+          setJobs((prev) => [...prev, ...result.jobs]);
+        }
+        setPagination({
+          hasMore: result.hasMore,
+          lastEvaluatedKey: result.lastEvaluatedKey,
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load jobs');
+      } finally {
+        setLoading(false);
     }
-  }, [statusFilter]);
+    },
+    [statusFilter, debouncedSearch, pagination.lastEvaluatedKey]
+  );
 
   useEffect(() => {
-    loadJobs();
-  }, [loadJobs]);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, lastEvaluatedKey: null }));
+    loadJobs(true);
+  }, [debouncedSearch, statusFilter]);
+
+  const handleLoadMore = () => {
+    if (pagination.hasMore && !loading) {
+      loadJobs(false);
+    }
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -101,7 +138,7 @@ export function JobsPage() {
       setCreateFormInitialValues(null);
       setCreateFormSourceDescription(null);
       form.reset();
-      await loadJobs();
+      await loadJobs(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create job');
     } finally {
@@ -139,7 +176,7 @@ export function JobsPage() {
         remote,
       });
       setEditingJob(null);
-      await loadJobs();
+      await loadJobs(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update job');
     } finally {
@@ -153,7 +190,7 @@ export function JobsPage() {
     try {
       await updateJob(job.jobId, { status: 'active' });
       if (editingJob?.jobId === job.jobId) setEditingJob(null);
-      await loadJobs();
+      await loadJobs(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to submit job');
     }
@@ -164,7 +201,7 @@ export function JobsPage() {
     try {
       await updateJob(job.jobId, { status: 'fulfilled' });
       if (editingJob?.jobId === job.jobId) setEditingJob(null);
-      await loadJobs();
+      await loadJobs(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update job');
     }
@@ -183,7 +220,7 @@ export function JobsPage() {
       await deleteJob(jobToDelete.jobId);
       if (editingJob?.jobId === jobToDelete.jobId) setEditingJob(null);
       setJobToDelete(null);
-      await loadJobs();
+      await loadJobs(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete job');
     } finally {
@@ -370,19 +407,36 @@ export function JobsPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex items-center gap-2">
-        <label htmlFor="jobs-status-filter" className="text-sm font-medium text-gray-700">Status:</label>
-        <select
-          id="jobs-status-filter"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-500"
-        >
-          <option value="all">All</option>
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>{JOB_STATUS_LABELS[s]}</option>
-          ))}
-        </select>
+      <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
+        <div className="flex items-center gap-2">
+          <label htmlFor="jobs-status-filter" className="text-sm font-medium text-gray-700">Status:</label>
+          <select
+            id="jobs-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-500"
+          >
+            <option value="all">All</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{JOB_STATUS_LABELS[s]}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1 min-w-0">
+          <label htmlFor="jobs-search" className="sr-only">Search jobs</label>
+          <input
+            id="jobs-search"
+            type="search"
+            placeholder="Search by job title, location, skills and certs..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+            aria-describedby="jobs-search-hint"
+          />
+          <p id="jobs-search-hint" className="mt-1 text-sm text-gray-500">
+            Matches job title, location, department, and skills/certifications
+          </p>
+        </div>
       </div>
 
       {error && (
@@ -447,7 +501,11 @@ export function JobsPage() {
       {loading && jobs.length === 0 && <p className="text-sm text-gray-500">Loading jobs…</p>}
       {!loading && jobs.length === 0 && (
         <p className="text-sm text-gray-500">
-          {statusFilter === 'all' ? 'No jobs yet. Create one to get started.' : `No ${JOB_STATUS_LABELS[statusFilter as JobStatus]} jobs.`}
+          {debouncedSearch.trim()
+            ? `No jobs match "${debouncedSearch}".`
+            : statusFilter === 'all'
+              ? 'No jobs yet. Create one to get started.'
+              : `No ${JOB_STATUS_LABELS[statusFilter as JobStatus]} jobs.`}
         </p>
       )}
       {/* Delete confirmation modal */}
@@ -493,7 +551,13 @@ export function JobsPage() {
       )}
 
       {jobs.length > 0 && (
-        <ul className="grid grid-cols-1 md:grid-cols-3 gap-4" role="list">
+        <>
+          {!loading && debouncedSearch.trim() && (
+            <p className="text-sm text-gray-600 mb-4">
+              Showing {jobs.length} job{jobs.length !== 1 ? 's' : ''} for &quot;{debouncedSearch}&quot;
+            </p>
+          )}
+          <ul className="grid grid-cols-1 md:grid-cols-3 gap-4" role="list">
           {jobs.map((job) => (
             <li key={job.jobId} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
               {editingJob?.jobId === job.jobId ? (
@@ -593,7 +657,20 @@ export function JobsPage() {
               )}
             </li>
           ))}
-        </ul>
+          </ul>
+          {pagination.hasMore && (
+            <div className="flex justify-center mt-8">
+              <button
+                type="button"
+                onClick={handleLoadMore}
+                disabled={loading}
+                className="px-6 py-2 rounded-lg bg-amber-600 text-white font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

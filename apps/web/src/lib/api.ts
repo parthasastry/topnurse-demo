@@ -171,15 +171,33 @@ export async function parseResume(): Promise<ParseResumeResponse> {
 
 // ——— Jobs (recruiter only) ———
 
-/** List jobs for the recruiter's organization. Optional status filter. */
-export async function fetchJobs(params?: { status?: JobStatus }): Promise<Job[]> {
-  const search = new URLSearchParams();
-  if (params?.status) search.set('status', params.status);
-  const url = `${API_BASE}/jobs${search.toString() ? `?${search}` : ''}`;
+export interface FetchJobsResult {
+  jobs: Job[];
+  lastEvaluatedKey: string | null;
+  hasMore: boolean;
+}
+
+/** List jobs with optional status, search (title, location, skills), and pagination. */
+export async function fetchJobs(params?: {
+  status?: JobStatus;
+  search?: string | null;
+  limit?: number;
+  lastEvaluatedKey?: string | null;
+}): Promise<FetchJobsResult> {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set('status', params.status);
+  if (params?.search?.trim()) searchParams.set('search', params.search.trim());
+  if (params?.limit != null) searchParams.set('limit', String(params.limit));
+  if (params?.lastEvaluatedKey) searchParams.set('lastEvaluatedKey', params.lastEvaluatedKey);
+  const url = `${API_BASE}/jobs${searchParams.toString() ? `?${searchParams}` : ''}`;
   const res = await fetch(url, { method: 'GET', headers: await getAuthHeaders() });
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
   const data = await res.json();
-  return data.jobs ?? [];
+  return {
+    jobs: data.jobs ?? [],
+    lastEvaluatedKey: data.lastEvaluatedKey ?? null,
+    hasMore: data.hasMore ?? false,
+  };
 }
 
 /** Get one job by id */

@@ -85,21 +85,109 @@ function parseBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-/** List jobs for the recruiter's organization. Optional query: status=draft|active|fulfilled */
-async function listJobs(organizationId: string, queryParams: Record<string, string | undefined>) {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: JOBS_TABLE,
-      KeyConditionExpression: 'organizationId = :orgId',
-      ExpressionAttributeValues: { ':orgId': organizationId },
-    })
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+const SCAN_PAGE = 100;
+
+/** Parse limit, lastEvaluatedKey, search from query params. */
+function parseListParams(queryParams: Record<string, string | undefined>): {
+  limit: number;
+  exclusiveStartKey: Record<string, unknown> | undefined;
+  search: string | null;
+  status: JobStatus | undefined;
+} {
+  const limit = Math.min(
+    MAX_LIMIT,
+    Math.max(1, parseInt(queryParams.limit ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT)
   );
-  let items = (result.Items ?? []) as Array<Record<string, unknown> & { status: JobStatus }>;
-  const statusFilter = queryParams.status as JobStatus | undefined;
-  if (statusFilter && JOB_STATUSES.includes(statusFilter)) {
-    items = items.filter((j) => j.status === statusFilter);
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  const lek = queryParams.lastEvaluatedKey;
+  if (lek && typeof lek === 'string') {
+    try {
+      exclusiveStartKey = JSON.parse(decodeURIComponent(lek)) as Record<string, unknown>;
+    } catch {
+      // ignore
+    }
   }
-  return json(200, { jobs: items });
+  const search = typeof queryParams.search === 'string' ? queryParams.search.trim() || null : null;
+  const status = queryParams.status as JobStatus | undefined;
+  return { limit, exclusiveStartKey, search, status: status && JOB_STATUSES.includes(status) ? status : undefined };
+}
+
+/** Match job by title, location, department, or skills/certs (case-insensitive). */
+function matchesSearch(job: Record<string, unknown>, searchLower: string): boolean {
+  const title = (job.title as string) ?? '';
+  if (title.toLowerCase().includes(searchLower)) return true;
+  const location = (job.location as string) ?? '';
+  if (location.toLowerCase().includes(searchLower)) return true;
+  const department = (job.department as string) ?? '';
+  if (department.toLowerCase().includes(searchLower)) return true;
+  const skills = job.skills as string[] | undefined;
+  if (Array.isArray(skills) && skills.some((s) => String(s).toLowerCase().includes(searchLower))) return true;
+  return false;
+}
+
+/** List jobs for the recruiter's organization. Optional: status, search (title, location, skills), limit, lastEvaluatedKey. */
+async function listJobs(organizationId: string, queryParams: Record<string, string | undefined>) {
+  const { limit, exclusiveStartKey, search, status } = parseListParams(queryParams);
+  const searchLower = search ? search.toLowerCase() : null;
+
+  if (!searchLower) {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: JOBS_TABLE,
+        KeyConditionExpression: 'organizationId = :orgId',
+        ExpressionAttributeValues: { ':orgId': organizationId },
+        Limit: limit,
+        ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey as Record<string, unknown> }),
+      })
+    );
+    let items = (result.Items ?? []) as Array<Record<string, unknown> & { status: JobStatus }>;
+    if (status) {
+      items = items.filter((j) => j.status === status);
+    }
+    const lastKey = result.LastEvaluatedKey ?? null;
+    return json(200, {
+      jobs: items,
+      lastEvaluatedKey: lastKey ? encodeURIComponent(JSON.stringify(lastKey)) : null,
+      hasMore: !!lastKey,
+    });
+  }
+
+  const collected: Array<Record<string, unknown>> = [];
+  let nextKey: Record<string, unknown> | undefined = exclusiveStartKey;
+
+  while (collected.length < limit) {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: JOBS_TABLE,
+        KeyConditionExpression: 'organizationId = :orgId',
+        ExpressionAttributeValues: { ':orgId': organizationId },
+        Limit: SCAN_PAGE,
+        ...(nextKey && { ExclusiveStartKey: nextKey as Record<string, unknown> }),
+      })
+    );
+    const rawItems = (result.Items ?? []) as Array<Record<string, unknown> & { status: JobStatus }>;
+    let items = rawItems;
+    if (status) {
+      items = items.filter((j) => j.status === status);
+    }
+    for (const job of items) {
+      if (matchesSearch(job, searchLower)) {
+        collected.push(job);
+        if (collected.length >= limit) break;
+      }
+    }
+    nextKey = result.LastEvaluatedKey ?? undefined;
+    if (!nextKey || rawItems.length === 0) break;
+  }
+
+  const lastKey = nextKey ?? null;
+  return json(200, {
+    jobs: collected,
+    lastEvaluatedKey: lastKey ? encodeURIComponent(JSON.stringify(lastKey)) : null,
+    hasMore: !!lastKey,
+  });
 }
 
 /** Build job item from body (create or full replace). Default status = draft. */
