@@ -1,0 +1,22 @@
+{
+  "name": "topnurse",
+  "private": true,
+  "description": "TopNurse V2 - Multi-tenant LinkedIn for Nurses",
+  "workspaces": [
+    "infra",
+    "backend",
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "infra:deploy": "npm run deploy --workspace=infra",
+    "infra:synth": "npm run cdk --workspace=infra -- synth",
+    "infra:diff": "npm run cdk --workspace=infra -- diff",
+    "web:dev": "npm run dev --workspace=web",
+    "web:build": "npm run build --workspace=web",
+    "web:preview": "npm run preview --workspace=web"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
