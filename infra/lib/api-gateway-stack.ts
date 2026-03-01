@@ -20,6 +20,13 @@ export interface ApiGatewayStackProps extends cdk.NestedStackProps {
   readonly userPool: cognito.IUserPool;
 }
 
+/** Allowed origins for CORS. Add new frontend URLs (e.g. Amplify, custom domain) here. */
+const CORS_ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://staging.d24pnbrx4ltkk.amplifyapp.com',
+];
+
 /**
  * API Gateway (REST). GET /hospitals, GET|PUT /candidates/me, resume upload (Cognito auth). CORS enabled.
  */
@@ -32,7 +39,7 @@ export class ApiGatewayStack extends cdk.NestedStack {
     this.api = new apigateway.RestApi(this, 'Api', {
       restApiName: 'topnurse-api',
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: CORS_ALLOWED_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['Content-Type', 'Authorization'],
       },

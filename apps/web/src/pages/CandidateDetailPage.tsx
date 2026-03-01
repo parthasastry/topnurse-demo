@@ -94,7 +94,7 @@ export function CandidateDetailPage() {
     );
   }
 
-  if (candidate === null) {
+  if (candidate === null || candidate === undefined) {
     return (
       <div className="max-w-2xl">
         <p className="text-sm text-gray-600">Candidate not found.</p>
@@ -103,6 +103,7 @@ export function CandidateDetailPage() {
     );
   }
 
+  const profile: CandidateProfile = candidate;
   return (
     <div className="max-w-2xl">
       <div className="mb-4">
@@ -111,11 +112,11 @@ export function CandidateDetailPage() {
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
         <div className="p-4 border-b border-gray-200">
           <h1 className="text-xl font-semibold text-gray-900">
-            {candidate.displayName || candidate.email}
+            {profile.displayName || profile.email}
           </h1>
         </div>
         <div className="p-4 overflow-y-auto">
-          <CandidateDetailsContent candidate={candidate} />
+          <CandidateDetailsContent candidate={profile} />
         </div>
       </div>
     </div>
