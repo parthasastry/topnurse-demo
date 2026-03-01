@@ -25,6 +25,7 @@ const CORS_ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://staging.d24pnbrx4ltkk.amplifyapp.com',
+  'https://staging-topnurse-demo.pssastry.com',
 ];
 
 /**
